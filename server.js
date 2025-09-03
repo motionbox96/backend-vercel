@@ -37,6 +37,25 @@ const razorpay = new Razorpay({
   key_secret: process.env.VITE_RAZORPAY_KEY_SECRET,
 });
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    message: 'DesignForge360 Backend Server is running',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    endpoints: [
+      'GET /api/health',
+      'POST /api/create-order',
+      'POST /api/verify-payment',
+      'GET /api/payment/:paymentId',
+      'POST /api/capture-payment',
+      'POST /api/refund-payment',
+      'POST /api/webhook'
+    ]
+  });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 

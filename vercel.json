@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "name": "designforge360-backend",
   "builds": [
     {
       "src": "server.js",
@@ -10,15 +9,10 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/server.js"
+      "dest": "server.js"
     }
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "server.js": {
-      "maxDuration": 30
-    }
   }
 }
