@@ -2,10 +2,15 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
+const nodemailer = require('nodemailer');
+const BackendContentFetcher = require('./services/contentFetcher');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Initialize content fetcher
+const contentFetcher = new BackendContentFetcher();
 
 // Middleware
 app.use(express.json());
@@ -37,25 +42,6 @@ const razorpay = new Razorpay({
   key_secret: process.env.VITE_RAZORPAY_KEY_SECRET,
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    message: 'DesignForge360 Backend Server is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    endpoints: [
-      'GET /api/health',
-      'POST /api/create-order',
-      'POST /api/verify-payment',
-      'GET /api/payment/:paymentId',
-      'POST /api/capture-payment',
-      'POST /api/refund-payment',
-      'POST /api/webhook'
-    ]
-  });
-});
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
@@ -64,6 +50,231 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
+});
+
+// Simple visitor tracking (in-memory storage for now)
+let visitorStats = {
+  totalUniqueVisitors: 0,
+  totalVisits: 0,
+  lastUpdated: Date.now(),
+  uniqueVisitorIds: new Set()
+};
+
+// Track visitor endpoint
+app.post('/api/track-visitor', (req, res) => {
+  try {
+    const { visitorId, sessionId } = req.body;
+    
+    if (!visitorId || !sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'visitorId and sessionId are required'
+      });
+    }
+
+    // Count total visits
+    visitorStats.totalVisits++;
+    
+    // Count unique visitors
+    if (!visitorStats.uniqueVisitorIds.has(visitorId)) {
+      visitorStats.uniqueVisitorIds.add(visitorId);
+      visitorStats.totalUniqueVisitors++;
+    }
+    
+    visitorStats.lastUpdated = Date.now();
+    
+    console.log(`👤 Visitor tracked: ${visitorId} | Total: ${visitorStats.totalUniqueVisitors} unique, ${visitorStats.totalVisits} visits`);
+    
+    res.json({
+      success: true,
+      stats: {
+        totalUniqueVisitors: visitorStats.totalUniqueVisitors,
+        totalVisits: visitorStats.totalVisits,
+        lastUpdated: visitorStats.lastUpdated
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Visitor tracking failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to track visitor'
+    });
+  }
+});
+
+// Get visitor stats endpoint
+app.get('/api/visitor-stats', (req, res) => {
+  res.json({
+    success: true,
+    stats: {
+      totalUniqueVisitors: visitorStats.totalUniqueVisitors,
+      totalVisits: visitorStats.totalVisits,
+      lastUpdated: visitorStats.lastUpdated
+    }
+  });
+});
+
+// ========== AUTOMATED CONTENT FETCHING ENDPOINTS ==========
+
+// Get trending articles
+app.get('/api/trending-articles', async (req, res) => {
+  try {
+    console.log('📰 Fetching trending articles...');
+    const articles = await contentFetcher.fetchTrendingContent();
+    
+    console.log(`✅ Retrieved ${articles.length} trending articles`);
+    res.json({
+      success: true,
+      articles: articles,
+      count: articles.length,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error fetching trending articles:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch trending articles',
+      message: error.message
+    });
+  }
+});
+
+// Get articles by category
+app.get('/api/trending-articles/:category', async (req, res) => {
+  try {
+    const { category } = req.params;
+    console.log(`📰 Fetching articles for category: ${category}`);
+    
+    const allArticles = await contentFetcher.fetchTrendingContent();
+    const filteredArticles = category === 'all' 
+      ? allArticles 
+      : allArticles.filter(article => 
+          article.category.toLowerCase() === category.toLowerCase()
+        );
+    
+    console.log(`✅ Retrieved ${filteredArticles.length} articles for category: ${category}`);
+    res.json({
+      success: true,
+      articles: filteredArticles,
+      category: category,
+      count: filteredArticles.length,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error(`❌ Error fetching articles for category ${req.params.category}:`, error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch articles by category',
+      message: error.message
+    });
+  }
+});
+
+// Force refresh trending content
+app.post('/api/refresh-trending-content', async (req, res) => {
+  try {
+    console.log('🔄 Force refreshing trending content...');
+    const articles = await contentFetcher.forceRefresh();
+    
+    console.log(`✅ Force refresh completed - ${articles.length} articles updated`);
+    res.json({
+      success: true,
+      message: 'Content refreshed successfully',
+      articles: articles,
+      count: articles.length,
+      refreshedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error force refreshing content:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to refresh trending content',
+      message: error.message
+    });
+  }
+});
+
+// Get content fetcher status
+app.get('/api/content-status', async (req, res) => {
+  try {
+    const articles = contentFetcher.getArticles();
+    const lastFetch = articles.length > 0 ? articles[0].fetchDate : null;
+    
+    res.json({
+      success: true,
+      status: {
+        totalArticles: articles.length,
+        lastFetchDate: lastFetch,
+        isScheduled: true,
+        nextCheckIn: '24 hours',
+        sources: ['DevTo', 'HackerNews', 'GitHub', 'ProductHunt', 'Generated'],
+        categories: [...new Set(articles.map(a => a.category))],
+        tags: [...new Set(articles.flatMap(a => a.tags))].slice(0, 20)
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error getting content status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get content status',
+      message: error.message
+    });
+  }
+});
+
+// Search articles
+app.get('/api/search-articles', async (req, res) => {
+  try {
+    const { q, category, source, limit = 10 } = req.query;
+    
+    if (!q) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query is required'
+      });
+    }
+    
+    console.log(`🔍 Searching articles for: ${q}`);
+    const allArticles = contentFetcher.getArticles();
+    
+    let filteredArticles = allArticles.filter(article => {
+      const searchText = (article.title + ' ' + article.excerpt + ' ' + article.tags.join(' ')).toLowerCase();
+      return searchText.includes(q.toLowerCase());
+    });
+    
+    // Apply additional filters
+    if (category && category !== 'all') {
+      filteredArticles = filteredArticles.filter(article => 
+        article.category.toLowerCase() === category.toLowerCase()
+      );
+    }
+    
+    if (source && source !== 'all') {
+      filteredArticles = filteredArticles.filter(article => 
+        article.source.toLowerCase() === source.toLowerCase()
+      );
+    }
+    
+    // Limit results
+    filteredArticles = filteredArticles.slice(0, parseInt(limit));
+    
+    console.log(`✅ Found ${filteredArticles.length} articles matching search`);
+    res.json({
+      success: true,
+      articles: filteredArticles,
+      query: q,
+      filters: { category, source, limit },
+      count: filteredArticles.length
+    });
+  } catch (error) {
+    console.error('❌ Error searching articles:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to search articles',
+      message: error.message
+    });
+  }
 });
 
 // Create Razorpay Order
@@ -341,6 +552,129 @@ app.post('/api/webhook', (req, res) => {
   } catch (error) {
     console.error('❌ Webhook processing error:', error);
     res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+// Email configuration using your domain's SMTP server
+const emailTransporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'mail.designforge360.in',
+  port: parseInt(process.env.SMTP_PORT) || 587,
+  secure: false, // true for 465, false for other ports
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  },
+  tls: {
+    rejectUnauthorized: false // Allow self-signed certificates
+  }
+});
+
+console.log('📧 Email transporter initialized with domain SMTP:', process.env.SMTP_HOST);
+
+// Simplified test email endpoint
+app.get('/api/test-email', async (req, res) => {
+  try {
+    console.log('🔍 Testing email configuration...');
+    await emailTransporter.verify();
+    
+    console.log('✅ Email configuration verified successfully');
+    res.json({
+      success: true,
+      message: 'Email configuration is working correctly',
+      emailUser: process.env.EMAIL_USER,
+      smtpService: 'Gmail'
+    });
+  } catch (error) {
+    console.error('❌ Email test failed:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Email configuration failed',
+      details: error.message,
+      suggestion: 'Check your email credentials or enable app passwords for Gmail'
+    });
+  }
+});
+
+// Contact form endpoint with detailed logging
+app.post('/api/contact', async (req, res) => {
+  try {
+    console.log('📧 Processing contact form submission...', {
+      name: req.body.name,
+      email: req.body.email,
+      subject: req.body.subject
+    });
+    
+    const { name, email, subject, message } = req.body;
+
+    // Validate required fields
+    if (!name || !email || !subject || !message) {
+      console.log('❌ Validation failed: Missing required fields');
+      return res.status(400).json({
+        success: false,
+        error: 'All fields are required'
+      });
+    }
+
+    // Email content
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: 'info@designforge360.in',
+      subject: `Contact Form: ${subject}`,
+      html: `
+        <h2>New Contact Form Submission</h2>
+        <p><strong>Name:</strong> ${name}</p>
+        <p><strong>Email:</strong> ${email}</p>
+        <p><strong>Subject:</strong> ${subject}</p>
+        <p><strong>Message:</strong></p>
+        <p>${message}</p>
+        
+        <hr>
+        <p><small>This email was sent from the DesignForge360 contact form.</small></p>
+      `,
+      replyTo: email
+    };
+
+    console.log('📤 Attempting to send email...');
+    
+    // Send email
+    const result = await emailTransporter.sendMail(mailOptions);
+    
+    console.log('✅ Contact form email sent successfully:', result.messageId);
+    
+    res.json({
+      success: true,
+      message: 'Thank you! Your message has been sent successfully.',
+      messageId: result.messageId
+    });
+    
+  } catch (error) {
+    console.error('❌ Contact form error:', {
+      message: error.message,
+      code: error.code,
+      command: error.command
+    });
+    
+    // Provide specific error messages based on error type
+    let errorMessage = 'Failed to send message. Please try again later.';
+    let suggestion = 'You can reach us directly at info@designforge360.in';
+    
+    if (error.code === 'EAUTH') {
+      errorMessage = 'Email authentication failed.';
+      suggestion = 'Please contact us directly at info@designforge360.in. The email service may need configuration.';
+    } else if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT') {
+      errorMessage = 'Email server connection failed.';
+      suggestion = 'Please contact us directly at info@designforge360.in or try again later.';
+    } else if (error.code === 'EENVELOPE') {
+      errorMessage = 'Invalid email configuration.';
+      suggestion = 'Please contact us directly at info@designforge360.in';
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: errorMessage,
+      fallback: suggestion,
+      technicalDetails: `Error code: ${error.code || 'Unknown'}`
+    });
   }
 });
 
